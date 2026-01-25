@@ -18,7 +18,7 @@ try:
 except Exception:
     pass
 
-# 2️⃣ Fallback to local environment (.env or system env)
+# 2️⃣ Fallback to local environment
 if GROQ_API_KEY is None:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -26,8 +26,6 @@ if GROQ_API_KEY is None:
 if not GROQ_API_KEY:
     st.warning("GROQ_API_KEY not found. Add it to Streamlit Secrets to continue.")
     st.stop()
-
-os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
 
 # =======================
@@ -48,6 +46,7 @@ prompt = ChatPromptTemplate.from_messages(
 
 def generate_response(question, llm_model, temperature, max_tokens):
     llm = ChatGroq(
+        api_key=GROQ_API_KEY,   # ✅ PASS KEY DIRECTLY
         model=llm_model,
         temperature=temperature,
         max_tokens=max_tokens
