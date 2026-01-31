@@ -1,89 +1,110 @@
-import streamlit as st
 import os
+import validators
+import streamlit as st
+from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
 
 from langchain_groq import ChatGroq
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import PromptTemplate
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+# ==================================================
+# ENV
+# ==================================================
+load_dotenv()
+os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
-# =======================
-# GROQ API KEY HANDLING
-# =======================
-
-GROQ_API_KEY = None
-
-# 1️⃣ Try Streamlit Secrets (Cloud)
-try:
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-except Exception:
-    pass
-
-# 2️⃣ Fallback to local environment
-if GROQ_API_KEY is None:
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# 3️⃣ Stop safely if missing
-if not GROQ_API_KEY:
-    st.warning("GROQ_API_KEY not found. Add it to Streamlit Secrets to continue.")
-    st.stop()
-
-
-# =======================
-# PROMPT TEMPLATE
-# =======================
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "You are a helpful assistant. Please respond to the user queries."),
-        ("user", "Question: {question}")
-    ]
+# ==================================================
+# UI
+# ==================================================
+st.set_page_config(
+    page_title="Website Summarizer",
+    page_icon="📝",
+    layout="centered"
 )
 
+st.title("📝 Website Summarizer")
+st.caption("Summarize long articles using LLMs with chunking")
 
-# =======================
-# RESPONSE GENERATOR
-# =======================
+url = st.text_input("Paste a website URL")
 
-def generate_response(question, llm_model, temperature, max_tokens):
-    llm = ChatGroq(
-        api_key=GROQ_API_KEY,   # ✅ PASS KEY DIRECTLY
-        model=llm_model,
-        temperature=temperature,
-        max_tokens=max_tokens
+# ==================================================
+# LLM
+# ==================================================
+llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0.3
+)
+
+chunk_prompt = PromptTemplate.from_template(
+    "Summarize the following content briefly:\n\n{text}"
+)
+
+final_prompt = PromptTemplate.from_template(
+    "Combine the following summaries into a clear final summary:\n\n{text}"
+)
+
+# ==================================================
+# WEBSITE CONTENT LOADER
+# ==================================================
+def load_website_chunks(url: str):
+    response = requests.get(
+        url,
+        timeout=15,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        }
+    )
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        tag.decompose()
+
+    text = soup.get_text(separator=" ", strip=True)
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100
     )
 
-    output_parser = StrOutputParser()
-    chain = prompt | llm | output_parser
+    return splitter.split_text(text)
 
-    return chain.invoke({"question": question})
+# ==================================================
+# HIERARCHICAL SUMMARIZATION
+# ==================================================
+def hierarchical_summarize(chunks):
+    partial_summaries = []
 
+    for chunk in chunks:
+        resp = llm.invoke(chunk_prompt.format(text=chunk))
+        partial_summaries.append(resp.content)
 
-# =======================
-# STREAMLIT UI
-# =======================
+    combined = "\n".join(partial_summaries)
+    final = llm.invoke(final_prompt.format(text=combined))
 
-st.title("Enhanced Q&A Chatbot With Groq")
+    return final.content
 
-st.sidebar.title("Settings")
+# ==================================================
+# ACTION
+# ==================================================
+if st.button("Summarize"):
+    if not validators.url(url):
+        st.error("Please enter a valid website URL")
+    else:
+        try:
+            with st.spinner("Summarizing website content..."):
+                chunks = load_website_chunks(url)
+                summary = hierarchical_summarize(chunks)
 
-llm = st.sidebar.selectbox(
-    "Select a Groq model",
-    ["llama-3.1-8b-instant", "llama-3.1-70b-versatile", "gemma2-9b-it"]
-)
+                st.success("Summary generated successfully!")
+                st.write(summary)
 
-temperature = st.sidebar.slider(
-    "Temperature", min_value=0.0, max_value=1.0, value=0.7
-)
-
-max_tokens = st.sidebar.slider(
-    "Max Tokens", min_value=50, max_value=300, value=150
-)
-
-st.write("Go ahead and write your question")
-user_input = st.text_input("You:")
-
-if user_input:
-    response = generate_response(user_input, llm, temperature, max_tokens)
-    st.write(response)
-else:
-    st.write("Please provide your query")
+        except Exception as e:
+            st.error(f"Error: {e}")
